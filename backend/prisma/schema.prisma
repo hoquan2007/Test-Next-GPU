@@ -1,0 +1,258 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum ImageType {
+  AVATAR
+  COVER
+  GALLERY
+  DOCUMENT
+  ID_VERIFICATION
+}
+
+enum ImageStatus {
+  UPLOADING
+  PROCESSING
+  READY
+  FAILED
+  DELETED
+}
+
+enum ImageVisibility {
+  PUBLIC
+  PRIVATE
+  FRIENDS_ONLY
+  UNLISTED
+}
+
+enum VariantType {
+  ORIGINAL
+  THUMBNAIL
+  MEDIUM
+  LARGE
+  WEBP
+  BLUR_PLACEHOLDER
+}
+
+enum StorageProvider {
+  LOCAL
+  S3
+  CLOUDINARY
+}
+
+enum AuditAction {
+  UPLOADED
+  UPDATED
+  DELETED
+  RESTORED
+  VISIBILITY_CHANGED
+  TAG_ADDED
+  TAG_REMOVED
+  MOVED_TO_ALBUM
+}
+
+// ─── User ────────────────────────────────────────────────────────────────────
+
+model User {
+  id        String     @id @default(uuid())
+  email     String     @unique
+  username  String     @unique
+  fullName  String?    @map("full_name")
+  status    UserStatus @default(ACTIVE)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  profile UserProfile?
+  images  UserImage[]
+  albums  ImageAlbum[]
+  auditLogs ImageAuditLog[]
+
+  @@map("users")
+}
+
+model UserProfile {
+  id          String  @id @default(uuid())
+  userId      String  @unique @map("user_id")
+  bio         String?
+  location    String?
+  website     String?
+  avatarId    String? @unique @map("avatar_id")
+  coverId     String? @unique @map("cover_id")
+  phoneNumber String? @map("phone_number")
+  dateOfBirth DateTime? @map("date_of_birth")
+
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  avatar UserImage? @relation("UserAvatar", fields: [avatarId], references: [id], onDelete: SetNull)
+  cover  UserImage? @relation("UserCover", fields: [coverId], references: [id], onDelete: SetNull)
+
+  @@map("user_profiles")
+}
+
+// ─── Image Core ──────────────────────────────────────────────────────────────
+
+model UserImage {
+  id          String          @id @default(uuid())
+  userId      String          @map("user_id")
+  type        ImageType       @default(GALLERY)
+  status      ImageStatus     @default(UPLOADING)
+  visibility  ImageVisibility @default(PRIVATE)
+  title       String?
+  description String?
+  altText     String?         @map("alt_text")
+  sortOrder   Int             @default(0) @map("sort_order")
+  isPrimary   Boolean         @default(false) @map("is_primary")
+  uploadedAt  DateTime        @default(now()) @map("uploaded_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+  deletedAt   DateTime?       @map("deleted_at")
+
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  metadata     ImageMetadata?
+  variants     ImageVariant[]
+  tags         ImageTagMapping[]
+  albumItems   AlbumImage[]
+  auditLogs    ImageAuditLog[]
+  avatarFor    UserProfile?      @relation("UserAvatar")
+  coverFor     UserProfile?      @relation("UserCover")
+
+  @@index([userId, type, status])
+  @@index([userId, visibility])
+  @@index([deletedAt])
+  @@map("user_images")
+}
+
+model ImageMetadata {
+  id              String          @id @default(uuid())
+  imageId         String          @unique @map("image_id")
+  originalName    String          @map("original_name")
+  mimeType        String          @map("mime_type")
+  fileSizeBytes   Int             @map("file_size_bytes")
+  width           Int
+  height          Int
+  aspectRatio     Float           @map("aspect_ratio")
+  colorSpace      String?         @map("color_space")
+  hasAlpha        Boolean         @default(false) @map("has_alpha")
+  orientation     Int             @default(1)
+  checksumSha256  String          @map("checksum_sha256")
+  storageProvider StorageProvider @default(LOCAL) @map("storage_provider")
+  storagePath     String          @map("storage_path")
+  publicUrl       String?         @map("public_url")
+  exifData        Json?           @map("exif_data")
+  dominantColor   String?         @map("dominant_color")
+  blurHash        String?         @map("blur_hash")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  image UserImage @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@index([checksumSha256])
+  @@map("image_metadata")
+}
+
+model ImageVariant {
+  id            String      @id @default(uuid())
+  imageId       String      @map("image_id")
+  variantType   VariantType @map("variant_type")
+  mimeType      String      @map("mime_type")
+  fileSizeBytes Int         @map("file_size_bytes")
+  width         Int
+  height        Int
+  storagePath   String      @map("storage_path")
+  publicUrl     String?     @map("public_url")
+  quality       Int?
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  image UserImage @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@unique([imageId, variantType])
+  @@map("image_variants")
+}
+
+// ─── Albums & Tags ───────────────────────────────────────────────────────────
+
+model ImageAlbum {
+  id          String          @id @default(uuid())
+  userId      String          @map("user_id")
+  name        String
+  description String?
+  visibility  ImageVisibility @default(PRIVATE)
+  coverImageId String?        @map("cover_image_id")
+  sortOrder   Int             @default(0) @map("sort_order")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items AlbumImage[]
+
+  @@index([userId])
+  @@map("image_albums")
+}
+
+model AlbumImage {
+  id        String   @id @default(uuid())
+  albumId   String   @map("album_id")
+  imageId   String   @map("image_id")
+  sortOrder Int      @default(0) @map("sort_order")
+  addedAt   DateTime @default(now()) @map("added_at")
+
+  album ImageAlbum @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  image UserImage  @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@unique([albumId, imageId])
+  @@map("album_images")
+}
+
+model ImageTag {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  slug      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+
+  images ImageTagMapping[]
+
+  @@map("image_tags")
+}
+
+model ImageTagMapping {
+  id      String @id @default(uuid())
+  imageId String @map("image_id")
+  tagId   String @map("tag_id")
+
+  image UserImage @relation(fields: [imageId], references: [id], onDelete: Cascade)
+  tag   ImageTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([imageId, tagId])
+  @@map("image_tag_mappings")
+}
+
+// ─── Audit ───────────────────────────────────────────────────────────────────
+
+model ImageAuditLog {
+  id        String      @id @default(uuid())
+  imageId   String      @map("image_id")
+  userId    String      @map("user_id")
+  action    AuditAction
+  details   Json?
+  ipAddress String?     @map("ip_address")
+  userAgent String?     @map("user_agent")
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  image UserImage @relation(fields: [imageId], references: [id], onDelete: Cascade)
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([imageId, createdAt])
+  @@index([userId, createdAt])
+  @@map("image_audit_logs")
+}
